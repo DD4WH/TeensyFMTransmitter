@@ -42,7 +42,11 @@ DMAChannel AudioOutputFM::dma(false);
 
 
 static double FM_MHz;
+#if TRANSMIT_SSB
+static const double FM_deviation = 4.0;
+#else
 static const double FM_deviation = 75000.0 * 4.0;
+#endif
 static double FS; //PLL Frequency
 
 
@@ -66,6 +70,19 @@ static float pre_a0;
 static float pre_a1;
 static float pre_b1;
 
+#if TRANSMIT_SSB
+// SSB
+static const unsigned SSB_Hilbert_taps = 64;
+static const float SSB_Hilbert_att = 60.0; // desired stopband attenuation
+static const float SSB_Hilbert_cutoff = 2700.0f; 
+static float SSB_Hilbert0_coeffs[SSB_Hilbert_taps];
+static float SSB_Hilbert90_coeffs[SSB_Hilbert_taps];
+static float SSB_Hilbert0_state[NUM_SAMPLES + SSB_Hilbert_taps];
+static float SSB_Hilbert90_state[NUM_SAMPLES + SSB_Hilbert_taps];
+static arm_fir_instance_f32 SSB_Hilbert0;
+static arm_fir_instance_f32 SSB_Hilbert90;
+#endif
+
 //extern and forward declarations:
 extern "C" void xbar_connect(unsigned int input, unsigned int output);
 extern void calc_FIR_coeffs (float * coeffs_I, int numCoeffs, float fc, float Astop, int type, float dfc, float Fsamprate);
@@ -75,7 +92,9 @@ extern void rds_update();
 extern float rds_sample();
 static void process(const audio_block_t *blockL, const audio_block_t *blockR, unsigned offset);
 inline static void processStereo(const float blockL[I_NUM_SAMPLES], const float blockR[I_NUM_SAMPLES], const unsigned offset);
-
+#if TRANSMIT_SSB
+inline static void processSSB(const float blockL[NUM_SAMPLES], const float blockR[NUM_SAMPLES], const unsigned offset);
+#endif
 
 // https://www.nxp.com/docs/en/application-note/AN5078.pdf
 #define PADCONFIG ((0 << 0) | (1 << 3) | (1 << 6)) //Pg 622 Reference Manual
@@ -128,6 +147,14 @@ void AudioOutputFM::begin(uint8_t mclk_pin, unsigned MHz, int preemphasis)
     Serial.println("Init of interpolation failed");
     while (1);
   }
+
+#if TRANSMIT_SSB
+  calc_FIR_coeffs(SSB_Hilbert0_coeffs, SSB_Hilbert_taps, SSB_Hilbert_cutoff, SSB_Hilbert_att, 0, 0.0, AUDIO_SAMPLERATE);
+  calc_FIR_coeffs(SSB_Hilbert90_coeffs, SSB_Hilbert_taps, SSB_Hilbert_cutoff, SSB_Hilbert_att, 4, 0.0, AUDIO_SAMPLERATE);
+
+  arm_fir_init_f32(&SSB_Hilbert0, SSB_Hilbert_taps, SSB_Hilbert0_coeffs, SSB_Hilbert0_state, NUM_SAMPLES);
+  arm_fir_init_f32(&SSB_Hilbert90, SSB_Hilbert_taps, SSB_Hilbert90_coeffs, SSB_Hilbert90_state, NUM_SAMPLES);
+#endif
 
   rds_begin();
 
@@ -324,7 +351,11 @@ void process(const audio_block_t *blockL, const audio_block_t *blockR, unsigned 
     }
   }
 
+#if TRANSMIT_SSB
 
+  processSSB(bL, bR, offset);
+  
+#else
   //interpolation:
 
   float iL[I_NUM_SAMPLES];
@@ -339,6 +370,7 @@ void process(const audio_block_t *blockL, const audio_block_t *blockR, unsigned 
 
   offset *= INTERPOLATION;
   processStereo(iL, iR, offset);
+#endif
 
   //Flush cache to memory, so that DMA sees the new data
   arm_dcache_flush_delete(&fm_tx_buffer[offset], sizeof(fm_tx_buffer) / 2 );
@@ -390,5 +422,54 @@ static void processStereo(const float blockL[I_NUM_SAMPLES], const float blockR[
 
 }
 
+#if TRANSMIT_SSB
+inline
+static void processSSB(const float blockL[NUM_SAMPLES], const float blockR[NUM_SAMPLES], const unsigned offset)
+{
+  float PLL_phase;
+  static float PLL_prev_phase = 0.0f;
+
+  float samples[NUM_SAMPLES];
+  float samples0[NUM_SAMPLES];
+  float samples90[NUM_SAMPLES];
+  
+  // make stereo input MONO
+  for(unsigned idx; idx < NUM_SAMPLES; idx++)
+  {
+    samples[idx] = (blockL[idx] + blockR[idx]) / 2.0f;
+  }
+
+  
+  // sample rate == AUDIO_SAMPLERATE
+  // Hilbert filter 0 degrees
+  arm_fir_f32(&SSB_Hilbert0, samples, samples0, NUM_SAMPLES);
+  // Hilbert filter 90 degrees
+  arm_fir_f32(&SSB_Hilbert90, samples, samples90, NUM_SAMPLES);
+
+  // now: blockR = Q, blockL = I
+  for(unsigned idx; idx < NUM_SAMPLES; idx++)
+  {
+    // calculate phase for PLL modulation
+    PLL_phase = PI + atan2(blockR[idx], blockL[idx]) * PI / 180.0f;
+    float dp = PLL_phase - PLL_prev_phase;
+    if(dp < 0)
+    {
+      dp = dp + TWO_PI;  
+    }
+    PLL_prev_phase = PLL_phase;
+    float df = dp * AUDIO_SAMPLERATE / TWO_PI;
+
+    uint32_t PLL_freq = calcPLLnmult(df);
+    if(idx == 50 || idx == 51)
+    {
+      Serial.println(PLL_freq);
+    }
+      
+    fm_tx_buffer[idx + offset] = PLL_freq;
+  }  
+  // calculate amplitude for MQS output 
+
+}
+#endif
 
 #endif

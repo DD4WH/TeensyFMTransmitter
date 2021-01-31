@@ -72,7 +72,7 @@ void textStateMachine(const char *filename)
 
   switch (state++)
   {
-    case 0 : fm.printf("\n%s\rDiag:\rAudio %2.2f%%\rFM:%2.2f%%", filename, AudioProcessorUsage(), (fm.time_us() / 2902.0f) * 100.0f ); break;
+    case 0 : fm.printf("\n%s\r  Audio %2.1f%%\r  FM:%2.1f%%", filename, AudioProcessorUsage(), (fm.time_us() / 2902.0f) * 100.0f ); break;
     case 1 : fm.println("\nPeter Piper "); break;
     case 2 : fm.printf("picked"); break;
     case 3 : fm.printf("\nmixed pickles."); break;
@@ -90,7 +90,7 @@ void playFile(const char *filename)
   while (playWav1.isPlaying()) {
     Serial.printf("Diagnostics AudioLib:%0.2f%% FM:%dus\n", AudioProcessorUsage(), fm.time_us() );
     textStateMachine(filename);
-    delay(1500);
+    delay(3000);
   }
 }
 

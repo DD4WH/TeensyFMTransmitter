@@ -37,7 +37,13 @@
 #define PREEMPHASIS_50        0   // use this if you are in Europe or elsewhere in the world
 #define PREEMPHASIS_75        1   // use this if you are in the Americas or South Korea
 
+#define TRANSMIT_SSB          0
+
+#if     TRANSMIT_SSB
+#define INTERPOLATION         1
+#else
 #define INTERPOLATION         8
+#endif
 
 #define AUDIO_SAMPLERATE      44117.64706
 #define I_TIMERVAL            ((int)(((double)F_BUS_ACTUAL) / (((double)AUDIO_SAMPLERATE) * INTERPOLATION) + 0.5))
